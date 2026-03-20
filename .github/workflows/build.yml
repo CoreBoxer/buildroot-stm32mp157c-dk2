@@ -3,20 +3,25 @@ name: Build STM32MP157C-DK2 SD Card Image
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 env:
-  BUILDROOT_VERSION: "2025.02.3"
+  BUILDROOT_VERSION: "2026.02.x"
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
 
     steps:
       # ===========================================
-      # 1. 释放磁盘空间（GitHub Runner 默认约 14GB 可用，
-      #    Buildroot 完整编译可能需要 10GB+）
+      # 1. 检出仓库（获取 kernel-fragment.config）
+      # ===========================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ===========================================
+      # 2. 释放磁盘空间
       # ===========================================
       - name: Free disk space
         run: |
@@ -28,7 +33,7 @@ jobs:
           df -h
 
       # ===========================================
-      # 2. 安装 Buildroot 构建依赖
+      # 3. 安装构建依赖
       # ===========================================
       - name: Install dependencies
         run: |
@@ -52,7 +57,7 @@ jobs:
             libssl-dev
 
       # ===========================================
-      # 3. 缓存 Buildroot 源码包下载目录
+      # 4. 缓存下载目录
       # ===========================================
       - name: Cache Buildroot downloads
         uses: actions/cache@v4
@@ -64,7 +69,7 @@ jobs:
             br-dl-
 
       # ===========================================
-      # 4. 缓存 ccache
+      # 5. 缓存 ccache
       # ===========================================
       - name: Cache ccache
         uses: actions/cache@v4
@@ -75,7 +80,7 @@ jobs:
             br-ccache-${{ env.BUILDROOT_VERSION }}-
 
       # ===========================================
-      # 5. 下载并解压 Buildroot
+      # 6. 下载 Buildroot
       # ===========================================
       - name: Download Buildroot
         run: |
@@ -84,16 +89,32 @@ jobs:
           rm "buildroot-${BUILDROOT_VERSION}.tar.xz"
 
       # ===========================================
-      # 6. 配置
+      # 7. 配置（加载 defconfig + 注入内核片段）
       # ===========================================
       - name: Configure
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
+          # 加载官方 defconfig
           make stm32mp157c_dk2_defconfig \
             BR2_DL_DIR="${HOME}/buildroot-dl"
 
+          # 注入内核配置片段路径
+          FRAGMENT="${GITHUB_WORKSPACE}/board/kernel-fragment.config"
+          echo "Kernel config fragment contents:"
+          cat "${FRAGMENT}"
+
+          # 写入 Buildroot .config
+          sed -i '/^BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=/d' output/.config
+          echo "BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=\"${FRAGMENT}\"" >> output/.config
+
+          # 重新解析使配置生效
+          make olddefconfig
+
+          # 验证
+          grep "FRAGMENT" output/.config
+
       # ===========================================
-      # 7. 编译
+      # 8. 编译
       # ===========================================
       - name: Build
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
@@ -104,7 +125,7 @@ jobs:
             -j$(nproc)
 
       # ===========================================
-      # 8. 查看产物
+      # 9. 查看产物
       # ===========================================
       - name: List output images
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
@@ -113,7 +134,23 @@ jobs:
           ls -lh output/images/
 
       # ===========================================
-      # 9. 压缩镜像
+      # 10. 验证内核配置确实生效
+      # ===========================================
+      - name: Verify kernel config
+        working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
+        run: |
+          echo "=== Checking kernel config ==="
+          for opt in CONFIG_DRM_FBDEV_EMULATION CONFIG_FB CONFIG_FRAMEBUFFER_CONSOLE; do
+            if grep -q "^${opt}=y" output/build/linux-*/.config 2>/dev/null; then
+              echo "  ✅ ${opt}=y"
+            else
+              echo "  ❌ ${opt} NOT enabled"
+              grep "${opt}" output/build/linux-*/.config 2>/dev/null || echo "    (not found)"
+            fi
+          done
+
+      # ===========================================
+      # 11. 压缩镜像
       # ===========================================
       - name: Compress image
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
@@ -122,7 +159,7 @@ jobs:
           xz -T0 -9 sdcard.img
 
       # ===========================================
-      # 10. 上传 Artifact
+      # 12. 上传 Artifact
       # ===========================================
       - name: Upload SD card image
         uses: actions/upload-artifact@v4
@@ -132,7 +169,7 @@ jobs:
           retention-days: 30
 
       # ===========================================
-      # 11. (可选) Tag 推送时自动创建 Release
+      # 13. Tag 推送时创建 Release
       # ===========================================
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
