@@ -94,8 +94,10 @@ jobs:
       - name: Configure
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
-          # 加载官方 defconfig
-          make stm32mp157c_dk2_defconfig \
+          OUTPUT_DIR="${GITHUB_WORKSPACE}/buildroot-${{ env.BUILDROOT_VERSION }}/output"
+          
+          # 加载官方 defconfig 并指定输出目录
+          make O="${OUTPUT_DIR}" stm32mp157c_dk2_defconfig \
             BR2_DL_DIR="${HOME}/buildroot-dl"
 
           # 注入内核配置片段路径
@@ -103,15 +105,15 @@ jobs:
           echo "Kernel config fragment contents:"
           cat "${FRAGMENT}"
 
-          # 写入 Buildroot .config
-          sed -i '/^BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=/d' output/.config
-          echo "BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=\"${FRAGMENT}\"" >> output/.config
+          # 写入 Buildroot .config —— 注意路径要加 O=
+          sed -i '/^BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=/d' "${OUTPUT_DIR}/.config"
+          echo "BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=\"${FRAGMENT}\"" >> "${OUTPUT_DIR}/.config"
 
-          # 重新解析使配置生效
-          make olddefconfig
+          # 重新解析使配置生效 —— 同样要加 O=
+          make O="${OUTPUT_DIR}" olddefconfig
 
           # 验证
-          grep "FRAGMENT" output/.config
+          grep "FRAGMENT" "${OUTPUT_DIR}/.config"
 
       # ===========================================
       # 8. 编译
