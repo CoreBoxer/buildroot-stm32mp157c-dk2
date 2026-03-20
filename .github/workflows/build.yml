@@ -14,15 +14,9 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # ===========================================
-      # 1. 检出仓库（获取 kernel-fragment.config）
-      # ===========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ===========================================
-      # 2. 释放磁盘空间
-      # ===========================================
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -32,9 +26,6 @@ jobs:
           sudo apt-get clean
           df -h
 
-      # ===========================================
-      # 3. 安装构建依赖
-      # ===========================================
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -56,9 +47,6 @@ jobs:
             libncurses-dev \
             libssl-dev
 
-      # ===========================================
-      # 4. 缓存下载目录
-      # ===========================================
       - name: Cache Buildroot downloads
         uses: actions/cache@v4
         with:
@@ -68,9 +56,6 @@ jobs:
             br-dl-${{ env.BUILDROOT_VERSION }}-
             br-dl-
 
-      # ===========================================
-      # 5. 缓存 ccache
-      # ===========================================
       - name: Cache ccache
         uses: actions/cache@v4
         with:
@@ -79,9 +64,6 @@ jobs:
           restore-keys: |
             br-ccache-${{ env.BUILDROOT_VERSION }}-
 
-      # ===========================================
-      # 6. 下载 Buildroot
-      # ===========================================
       - name: Download Buildroot
         run: |
           wget -q "https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.xz"
@@ -89,55 +71,48 @@ jobs:
           rm "buildroot-${BUILDROOT_VERSION}.tar.xz"
 
       # ===========================================
-      # 7. 配置（加载 defconfig + 注入内核片段）
+      # Configure：defconfig + fragment 注入
       # ===========================================
       - name: Configure
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
-          OUTPUT_DIR="${GITHUB_WORKSPACE}/buildroot-${{ env.BUILDROOT_VERSION }}/output"
-          
-          # 加载官方 defconfig 并指定输出目录
-          make O="${OUTPUT_DIR}" stm32mp157c_dk2_defconfig \
-            BR2_DL_DIR="${HOME}/buildroot-dl"
-
-          # 注入内核配置片段路径
           FRAGMENT="${GITHUB_WORKSPACE}/board/kernel-fragment.config"
-          echo "Kernel config fragment contents:"
+
+          echo "=== Kernel config fragment ==="
           cat "${FRAGMENT}"
 
-          # 写入 Buildroot .config —— 注意路径要加 O=
-          sed -i '/^BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=/d' "${OUTPUT_DIR}/.config"
-          echo "BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=\"${FRAGMENT}\"" >> "${OUTPUT_DIR}/.config"
+          # 加载官方 defconfig
+          make stm32mp157c_dk2_defconfig \
+            BR2_DL_DIR="${HOME}/buildroot-dl"
 
-          # 重新解析使配置生效 —— 同样要加 O=
-          make O="${OUTPUT_DIR}" olddefconfig
+          # 注入 fragment 并更新配置
+          make BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="${FRAGMENT}" \
+            BR2_DL_DIR="${HOME}/buildroot-dl" \
+            olddefconfig
 
-          # 验证
-          grep "FRAGMENT" "${OUTPUT_DIR}/.config"
+          echo "=== Verifying .config ==="
+          grep "FRAGMENT" .config
 
       # ===========================================
-      # 8. 编译
+      # Build
       # ===========================================
       - name: Build
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
+          FRAGMENT="${GITHUB_WORKSPACE}/board/kernel-fragment.config"
+
           make \
+            BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="${FRAGMENT}" \
             BR2_DL_DIR="${HOME}/buildroot-dl" \
             BR2_CCACHE_DIR="${HOME}/.buildroot-ccache" \
             -j$(nproc)
 
-      # ===========================================
-      # 9. 查看产物
-      # ===========================================
       - name: List output images
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
           echo "=== Generated images ==="
           ls -lh output/images/
 
-      # ===========================================
-      # 10. 验证内核配置确实生效
-      # ===========================================
       - name: Verify kernel config
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
@@ -151,18 +126,12 @@ jobs:
             fi
           done
 
-      # ===========================================
-      # 11. 压缩镜像
-      # ===========================================
       - name: Compress image
         working-directory: buildroot-${{ env.BUILDROOT_VERSION }}
         run: |
           cd output/images
           xz -T0 -9 sdcard.img
 
-      # ===========================================
-      # 12. 上传 Artifact
-      # ===========================================
       - name: Upload SD card image
         uses: actions/upload-artifact@v4
         with:
@@ -170,9 +139,6 @@ jobs:
           path: buildroot-${{ env.BUILDROOT_VERSION }}/output/images/sdcard.img.xz
           retention-days: 30
 
-      # ===========================================
-      # 13. Tag 推送时创建 Release
-      # ===========================================
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
